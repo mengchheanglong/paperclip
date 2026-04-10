@@ -9,6 +9,7 @@ import {
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { logger } from "../middleware/logger.js";
+import { artifactService } from "../services/artifacts.js";
 import {
   approvalService,
   heartbeatService,
@@ -29,6 +30,7 @@ function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(a
 export function approvalRoutes(db: Db) {
   const router = Router();
   const svc = approvalService(db);
+  const artifactsSvc = artifactService(db);
   const heartbeat = heartbeatService(db);
   const issueApprovalsSvc = issueApprovalService(db);
   const secretsSvc = secretService(db);
@@ -127,8 +129,28 @@ export function approvalRoutes(db: Db) {
       req.body.decisionNote,
     );
 
+    const linkedIssues = applied && approval.status === "approved"
+      ? await issueApprovalsSvc.listIssuesForApproval(approval.id)
+      : [];
+    if (applied && approval.status === "approved") {
+      for (const linkedIssue of linkedIssues) {
+        await artifactsSvc.ensureApprovedSnapshotsForIssueDocuments({
+          issueId: linkedIssue.id,
+          context: {
+            origin: "approval",
+            approvalId: approval.id,
+            originRoute: "/approvals/:id/approve",
+            approvedAt: approval.decidedAt ?? new Date(),
+            approvedBy: {
+              type: "user",
+              id: req.actor.userId ?? "board",
+            },
+          },
+        });
+      }
+    }
+
     if (applied) {
-      const linkedIssues = await issueApprovalsSvc.listIssuesForApproval(approval.id);
       const linkedIssueIds = linkedIssues.map((issue) => issue.id);
       const primaryIssueId = linkedIssueIds[0] ?? null;
 

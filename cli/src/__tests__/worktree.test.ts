@@ -100,6 +100,7 @@ function buildSourceConfig(): PaperclipConfig {
         keyFilePath: "/tmp/main/secrets/master.key",
       },
     },
+    extensions: {},
   };
 }
 

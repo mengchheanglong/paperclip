@@ -66,6 +66,7 @@ function createExistingConfigFixture() {
         keyFilePath: path.join(runtimeRoot, "secrets", "master.key"),
       },
     },
+    extensions: {},
   };
 
   fs.mkdirSync(path.dirname(configPath), { recursive: true });

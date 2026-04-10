@@ -25,6 +25,14 @@ export {
   type UpdateCompanyBranding,
 } from "./company.js";
 export {
+  artifactStatusSchema,
+  artifactFormatSchema,
+  artifactStorageTypeSchema,
+  artifactCreatedByTypeSchema,
+  listArtifactsQuerySchema,
+  type ListArtifactsQuery,
+} from "./artifact.js";
+export {
   feedbackDataSharingPreferenceSchema,
   feedbackTargetTypeSchema,
   feedbackTraceStatusSchema,

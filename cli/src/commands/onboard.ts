@@ -501,6 +501,7 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
     },
     storage,
     secrets,
+    extensions: {},
   };
 
   const keyResult = ensureLocalSecretsKeyFile(config, configPath);

@@ -1,4 +1,5 @@
 export { companyService } from "./companies.js";
+export { artifactService } from "./artifacts.js";
 export { feedbackService } from "./feedback.js";
 export { companySkillService } from "./company-skills.js";
 export { agentService, deduplicateAgentName } from "./agents.js";
@@ -30,5 +31,12 @@ export { workProductService } from "./work-products.js";
 export { logActivity, type LogActivityInput } from "./activity-log.js";
 export { notifyHireApproved, type NotifyHireApprovedInput } from "./hire-hook.js";
 export { publishLiveEvent, subscribeCompanyLiveEvents } from "./live-events.js";
+export {
+  registerArtifactCreatedHandler,
+  removeArtifactCreatedHandler,
+  clearArtifactCreatedHandlers,
+  emitArtifactCreated,
+  type ArtifactCreatedHandler,
+} from "./artifact-events.js";
 export { reconcilePersistedRuntimeServicesOnStartup, restartDesiredRuntimeServicesOnStartup } from "./workspace-runtime.js";
 export { createStorageServiceFromConfig, getStorageService } from "../storage/index.js";

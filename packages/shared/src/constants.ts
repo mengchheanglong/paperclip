@@ -703,6 +703,7 @@ export const PLUGIN_EVENT_TYPES = [
   "goal.updated",
   "approval.created",
   "approval.decided",
+  "artifact.created",
   "cost_event.created",
   "activity.logged",
 ] as const;

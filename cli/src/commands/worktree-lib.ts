@@ -247,6 +247,7 @@ export function buildWorktreeConfig(input: {
         keyFilePath: paths.secretsKeyFilePath,
       },
     },
+    extensions: source?.extensions ?? {},
   };
 }
 

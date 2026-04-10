@@ -29,6 +29,7 @@ import { trackAgentTaskCompleted } from "@paperclipai/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
 import type { StorageService } from "../storage/types.js";
 import { validate } from "../middleware/validate.js";
+import { artifactService } from "../services/artifacts.js";
 import {
   accessService,
   agentService,
@@ -279,6 +280,7 @@ export function issueRoutes(
   const router = Router();
   const svc = issueService(db);
   const access = accessService(db);
+  const artifactsSvc = artifactService(db);
   const heartbeat = heartbeatService(db);
   const feedback = feedbackService(db);
   const instanceSettings = instanceSettingsService(db);
@@ -1396,6 +1398,7 @@ export function issueRoutes(
       commentBody,
     });
     const decisionId = transition.decision ? randomUUID() : null;
+    const decisionOccurredAt = transition.decision ? new Date() : null;
     if (decisionId) {
       const nextExecutionState = transition.patch.executionState;
       if (!nextExecutionState || typeof nextExecutionState !== "object") {
@@ -1494,6 +1497,25 @@ export function issueRoutes(
     if (!issue) {
       res.status(404).json({ error: "Issue not found" });
       return;
+    }
+    if (
+      transition.decision?.outcome === "approved" &&
+      decisionOccurredAt
+    ) {
+      await artifactsSvc.ensureApprovedSnapshotsForIssueDocuments({
+        issueId: issue.id,
+        context: {
+          origin: "issue_execution_decision",
+          executionDecisionId: decisionId,
+          executionDecisionStageType: transition.decision.stageType,
+          originRoute: "/issues/:id",
+          approvedAt: decisionOccurredAt,
+          approvedBy: {
+            type: actor.actorType,
+            id: actor.actorId,
+          },
+        },
+      });
     }
     let issueResponse: typeof issue & { blockedBy?: unknown; blocks?: unknown } = issue;
     let updatedRelations: Awaited<ReturnType<typeof svc.getRelationSummaries>> | null = null;
