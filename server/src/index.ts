@@ -1,5 +1,5 @@
 /// <reference path="./types/express.d.ts" />
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -18,10 +18,14 @@ import {
   reconcilePendingMigrationHistory,
   formatDatabaseBackupResult,
   runDatabaseBackup,
+  readPostmasterOptsPort,
+  readPostmasterPidPort,
+  readRunningPostmasterPid,
   authUsers,
   companies,
   companyMemberships,
   instanceUserRoles,
+  tryAdoptEmbeddedPostgresCluster,
 } from "@paperclipai/db";
 import detectPort from "detect-port";
 import { createApp } from "./app.js";
@@ -321,46 +325,35 @@ export async function startServer(): Promise<StartedServer> {
     const clusterVersionFile = resolve(dataDir, "PG_VERSION");
     const clusterAlreadyInitialized = existsSync(clusterVersionFile);
     const postmasterPidFile = resolve(dataDir, "postmaster.pid");
-    const isPidRunning = (pid: number): boolean => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch {
-        return false;
-      }
-    };
-  
-    const getRunningPid = (): number | null => {
-      if (!existsSync(postmasterPidFile)) return null;
-      try {
-        const pidLine = readFileSync(postmasterPidFile, "utf8").split("\n")[0]?.trim();
-        const pid = Number(pidLine);
-        if (!Number.isInteger(pid) || pid <= 0) return null;
-        if (!isPidRunning(pid)) return null;
-        return pid;
-      } catch {
-        return null;
-      }
-    };
-  
-    const runningPid = getRunningPid();
+    const postmasterOptsFile = resolve(dataDir, "postmaster.opts");
+    const lastKnownPort = readPostmasterOptsPort(postmasterOptsFile);
+    const runningPid = readRunningPostmasterPid(postmasterPidFile);
     if (runningPid) {
+      port = readPostmasterPidPort(postmasterPidFile) ?? lastKnownPort ?? configuredPort;
       logger.warn(`Embedded PostgreSQL already running; reusing existing process (pid=${runningPid}, port=${port})`);
     } else {
-      const configuredAdminConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${configuredPort}/postgres`;
-      try {
-        const actualDataDir = await getPostgresDataDirectory(configuredAdminConnectionString);
-        if (
-          typeof actualDataDir !== "string" ||
-          resolve(actualDataDir) !== resolve(dataDir)
-        ) {
-          throw new Error("reachable postgres does not use the expected embedded data directory");
-        }
-        await ensurePostgresDatabase(configuredAdminConnectionString, "paperclip");
+      const adoptedPort = await tryAdoptEmbeddedPostgresCluster({
+        dataDir,
+        ports: [configuredPort, lastKnownPort],
+        databaseName: "paperclip",
+      });
+      if (adoptedPort !== null) {
+        port = adoptedPort;
         logger.warn(
-          `Embedded PostgreSQL appears to already be reachable without a pid file; reusing existing server on configured port ${configuredPort}`,
+          `Embedded PostgreSQL appears to already be reachable without a pid file; reusing existing server on port ${adoptedPort}`,
         );
-      } catch {
+      } else {
+        if (clusterAlreadyInitialized && lastKnownPort) {
+          const detectedLastKnownPort = await detectPort(lastKnownPort);
+          if (detectedLastKnownPort !== lastKnownPort) {
+            throw new Error(
+              `Embedded PostgreSQL cluster at ${dataDir} was previously started on port ${lastKnownPort}, ` +
+                "but Paperclip could not reconnect to it and postmaster.pid is missing. " +
+                "This usually means an old postgres process is still attached to the data directory. " +
+                "Stop the stale postgres process tree and retry.",
+            );
+          }
+        }
         const detectedPort = await detectPort(configuredPort);
         if (detectedPort !== configuredPort) {
           logger.warn(`Embedded PostgreSQL port is in use; using next free port (requestedPort=${configuredPort}, selectedPort=${detectedPort})`);

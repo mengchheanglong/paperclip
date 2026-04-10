@@ -29,5 +29,11 @@ export {
   createEmbeddedPostgresLogBuffer,
   formatEmbeddedPostgresError,
 } from "./embedded-postgres-error.js";
+export {
+  readPostmasterOptsPort,
+  readPostmasterPidPort,
+  readRunningPostmasterPid,
+  tryAdoptEmbeddedPostgresCluster,
+} from "./embedded-postgres-runtime.js";
 export { issueRelations } from "./schema/issue_relations.js";
 export * from "./schema/index.js";

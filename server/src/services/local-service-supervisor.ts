@@ -279,11 +279,51 @@ export async function touchLocalServiceRegistryRecord(
 }
 
 export async function terminateLocalService(
-  record: Pick<LocalServiceRegistryRecord, "pid" | "processGroupId">,
+  record: Pick<LocalServiceRegistryRecord, "pid" | "processGroupId"> & {
+    metadata?: LocalServiceRegistryRecord["metadata"];
+  },
   opts?: { signal?: NodeJS.Signals; forceAfterMs?: number },
 ) {
   const signal = opts?.signal ?? "SIGTERM";
   const targetProcessGroup = process.platform !== "win32" && record.processGroupId && record.processGroupId > 0;
+  if (process.platform === "win32") {
+    const childPid =
+      typeof record.metadata?.childPid === "number" && record.metadata.childPid > 0
+        ? record.metadata.childPid
+        : null;
+    try {
+      process.kill(record.pid, signal);
+    } catch {
+      // Fall through to the forced cleanup below.
+    }
+
+    const deadline = Date.now() + (opts?.forceAfterMs ?? 2_000);
+    while (Date.now() < deadline) {
+      const runnerAlive = isPidAlive(record.pid);
+      const childAlive = childPid !== null && isPidAlive(childPid);
+      if (!runnerAlive && !childAlive) {
+        return;
+      }
+      await delay(100);
+    }
+
+    if (childPid !== null && isPidAlive(childPid)) {
+      try {
+        await execFileAsync("taskkill", ["/pid", String(childPid), "/t", "/f"]);
+      } catch {
+        // Ignore cleanup races.
+      }
+    }
+    if (isPidAlive(record.pid)) {
+      try {
+        await execFileAsync("taskkill", ["/pid", String(record.pid), "/t", "/f"]);
+      } catch {
+        // Ignore cleanup races.
+      }
+    }
+    return;
+  }
+
   try {
     if (targetProcessGroup) {
       process.kill(-record.processGroupId!, signal);

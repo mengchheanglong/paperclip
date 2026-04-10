@@ -1,8 +1,14 @@
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import path from "node:path";
-import { ensurePostgresDatabase, getPostgresDataDirectory } from "./client.js";
+import { ensurePostgresDatabase } from "./client.js";
 import { createEmbeddedPostgresLogBuffer, formatEmbeddedPostgresError } from "./embedded-postgres-error.js";
+import {
+  readPostmasterOptsPort,
+  readPostmasterPidPort,
+  readRunningPostmasterPid,
+  tryAdoptEmbeddedPostgresCluster,
+} from "./embedded-postgres-runtime.js";
 import { resolveDatabaseTarget } from "./runtime-config.js";
 
 type EmbeddedPostgresInstance = {
@@ -27,29 +33,6 @@ export type MigrationConnection = {
   source: string;
   stop: () => Promise<void>;
 };
-
-function readRunningPostmasterPid(postmasterPidFile: string): number | null {
-  if (!existsSync(postmasterPidFile)) return null;
-  try {
-    const pid = Number(readFileSync(postmasterPidFile, "utf8").split("\n")[0]?.trim());
-    if (!Number.isInteger(pid) || pid <= 0) return null;
-    process.kill(pid, 0);
-    return pid;
-  } catch {
-    return null;
-  }
-}
-
-function readPidFilePort(postmasterPidFile: string): number | null {
-  if (!existsSync(postmasterPidFile)) return null;
-  try {
-    const lines = readFileSync(postmasterPidFile, "utf8").split("\n");
-    const port = Number(lines[3]?.trim());
-    return Number.isInteger(port) && port > 0 ? port : null;
-  } catch {
-    return null;
-  }
-}
 
 async function isPortInUse(port: number): Promise<boolean> {
   return await new Promise((resolve) => {
@@ -92,39 +75,16 @@ async function ensureEmbeddedPostgresConnection(
   preferredPort: number,
 ): Promise<MigrationConnection> {
   const EmbeddedPostgres = await loadEmbeddedPostgresCtor();
-  const selectedPort = await findAvailablePort(preferredPort);
   const postmasterPidFile = path.resolve(dataDir, "postmaster.pid");
+  const postmasterOptsFile = path.resolve(dataDir, "postmaster.opts");
   const pgVersionFile = path.resolve(dataDir, "PG_VERSION");
   const runningPid = readRunningPostmasterPid(postmasterPidFile);
-  const runningPort = readPidFilePort(postmasterPidFile);
-  const preferredAdminConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${preferredPort}/postgres`;
+  const lastKnownPort = readPostmasterOptsPort(postmasterOptsFile);
+  const runningPort = readPostmasterPidPort(postmasterPidFile) ?? lastKnownPort ?? preferredPort;
   const logBuffer = createEmbeddedPostgresLogBuffer();
 
-  if (!runningPid && existsSync(pgVersionFile)) {
-    try {
-      const actualDataDir = await getPostgresDataDirectory(preferredAdminConnectionString);
-      const matchesDataDir =
-        typeof actualDataDir === "string" &&
-        path.resolve(actualDataDir) === path.resolve(dataDir);
-      if (!matchesDataDir) {
-        throw new Error("reachable postgres does not use the expected embedded data directory");
-      }
-      await ensurePostgresDatabase(preferredAdminConnectionString, "paperclip");
-      process.emitWarning(
-        `Adopting an existing PostgreSQL instance on port ${preferredPort} for embedded data dir ${dataDir} because postmaster.pid is missing.`,
-      );
-      return {
-        connectionString: `postgres://paperclip:paperclip@127.0.0.1:${preferredPort}/paperclip`,
-        source: `embedded-postgres@${preferredPort}`,
-        stop: async () => {},
-      };
-    } catch {
-      // Fall through and attempt to start the configured embedded cluster.
-    }
-  }
-
   if (runningPid) {
-    const port = runningPort ?? preferredPort;
+    const port = runningPort;
     const adminConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${port}/postgres`;
     await ensurePostgresDatabase(adminConnectionString, "paperclip");
     return {
@@ -133,6 +93,38 @@ async function ensureEmbeddedPostgresConnection(
       stop: async () => {},
     };
   }
+
+  if (existsSync(pgVersionFile)) {
+    const adoptedPort = await tryAdoptEmbeddedPostgresCluster({
+      dataDir,
+      ports: [preferredPort, lastKnownPort],
+      databaseName: "paperclip",
+    });
+    if (adoptedPort !== null) {
+      process.emitWarning(
+        `Adopting an existing PostgreSQL instance on port ${adoptedPort} for embedded data dir ${dataDir} because postmaster.pid is missing.`,
+      );
+      return {
+        connectionString: `postgres://paperclip:paperclip@127.0.0.1:${adoptedPort}/paperclip`,
+        source: `embedded-postgres@${adoptedPort}`,
+        stop: async () => {},
+      };
+    }
+  }
+
+  if (existsSync(pgVersionFile) && lastKnownPort) {
+    const lastKnownPortBusy = await isPortInUse(lastKnownPort);
+    if (lastKnownPortBusy) {
+      throw new Error(
+        `Embedded PostgreSQL cluster at ${dataDir} was previously started on port ${lastKnownPort}, ` +
+          "but Paperclip could not reconnect to it and postmaster.pid is missing. " +
+          "This usually means an old postgres process is still attached to the data directory. " +
+          "Stop the stale postgres process tree and retry.",
+      );
+    }
+  }
+
+  const selectedPort = await findAvailablePort(preferredPort);
 
   const instance = new EmbeddedPostgres({
     databaseDir: dataDir,

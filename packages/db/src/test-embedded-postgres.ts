@@ -64,6 +64,14 @@ function formatEmbeddedPostgresError(error: unknown): string {
   return "embedded Postgres startup failed";
 }
 
+function removeTempDir(dir: string) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // Windows can briefly retain file handles after the embedded server stops.
+  }
+}
+
 async function probeEmbeddedPostgresSupport(): Promise<EmbeddedPostgresTestSupport> {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-embedded-postgres-probe-"));
   const port = await getAvailablePort();
@@ -90,7 +98,7 @@ async function probeEmbeddedPostgresSupport(): Promise<EmbeddedPostgresTestSuppo
     };
   } finally {
     await instance.stop().catch(() => {});
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    removeTempDir(dataDir);
   }
 }
 
@@ -131,12 +139,12 @@ export async function startEmbeddedPostgresTestDatabase(
       connectionString,
       cleanup: async () => {
         await instance.stop().catch(() => {});
-        fs.rmSync(dataDir, { recursive: true, force: true });
+        removeTempDir(dataDir);
       },
     };
   } catch (error) {
     await instance.stop().catch(() => {});
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    removeTempDir(dataDir);
     throw new Error(
       `Failed to start embedded PostgreSQL test database: ${formatEmbeddedPostgresError(error)}`,
     );

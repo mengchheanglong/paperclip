@@ -24,6 +24,13 @@ function summarizeRecentLogs(recentLogs: string[]): string | null {
 
 function detectEmbeddedPostgresHint(recentLogs: string[]): string | null {
   const haystack = recentLogs.join("\n").toLowerCase();
+  if (haystack.includes("pre-existing shared memory block is still in use")) {
+    return (
+      "Embedded PostgreSQL found an existing shared-memory block that is still owned by another postgres process. " +
+      "This usually means a previous local Paperclip Postgres process did not shut down cleanly. " +
+      "Stop the leftover postgres process tree for the same data directory, then retry."
+    );
+  }
   if (!haystack.includes("could not create shared memory segment")) {
     return null;
   }
