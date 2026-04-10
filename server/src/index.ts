@@ -3,6 +3,7 @@ import { existsSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import { stdin, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import type { Request as ExpressRequest, RequestHandler } from "express";
@@ -176,6 +177,39 @@ export async function startServer(): Promise<StartedServer> {
     logger.info({ pendingMigrations: state.pendingMigrations }, `Applying ${state.pendingMigrations.length} pending migrations for ${label}`);
     await applyPendingMigrations(connectionString);
     return "applied (pending migrations)";
+  }
+
+  function isTransientPostgresStartupError(error: unknown) {
+    return !!error
+      && typeof error === "object"
+      && "code" in error
+      && (error as { code?: string }).code === "57P03";
+  }
+
+  async function withTransientPostgresStartupRetry<T>(
+    label: string,
+    action: () => Promise<T>,
+  ): Promise<T> {
+    const maxAttempts = 5;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        return await action();
+      } catch (error) {
+        if (!isTransientPostgresStartupError(error) || attempt === maxAttempts) {
+          throw error;
+        }
+
+        const waitMs = attempt * 250;
+        logger.warn(
+          { attempt, maxAttempts, waitMs, label },
+          `${label} hit transient PostgreSQL startup state (57P03); retrying`,
+        );
+        await delay(waitMs);
+      }
+    }
+
+    throw new Error(`${label} failed unexpectedly after PostgreSQL startup retries`);
   }
   
   function isLoopbackHost(host: string): boolean {
@@ -403,7 +437,10 @@ export async function startServer(): Promise<StartedServer> {
     }
   
     const embeddedAdminConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${port}/postgres`;
-    const dbStatus = await ensurePostgresDatabase(embeddedAdminConnectionString, "paperclip");
+    const dbStatus = await withTransientPostgresStartupRetry(
+      "ensure embedded PostgreSQL database",
+      () => ensurePostgresDatabase(embeddedAdminConnectionString, "paperclip"),
+    );
     if (dbStatus === "created") {
       logger.info("Created embedded PostgreSQL database: paperclip");
     }
@@ -413,9 +450,12 @@ export async function startServer(): Promise<StartedServer> {
     if (shouldAutoApplyFirstRunMigrations) {
       logger.info("Detected first-run embedded PostgreSQL setup; applying pending migrations automatically");
     }
-    migrationSummary = await ensureMigrations(embeddedConnectionString, "Embedded PostgreSQL", {
-      autoApply: shouldAutoApplyFirstRunMigrations,
-    });
+    migrationSummary = await withTransientPostgresStartupRetry(
+      "inspect embedded PostgreSQL migrations",
+      () => ensureMigrations(embeddedConnectionString, "Embedded PostgreSQL", {
+        autoApply: shouldAutoApplyFirstRunMigrations,
+      }),
+    );
   
     db = createDb(embeddedConnectionString);
     logger.info("Embedded PostgreSQL ready");

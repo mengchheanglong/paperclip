@@ -496,3 +496,24 @@ Networking behavior for this smoke script:
 - auto-detects and prints a Paperclip host URL reachable from inside OpenClaw Docker
 - default container-side host alias is `host.docker.internal` (override with `PAPERCLIP_HOST_FROM_CONTAINER` / `PAPERCLIP_HOST_PORT`)
 - if Paperclip rejects container hostnames in authenticated/private mode, allow `host.docker.internal` via `pnpm paperclipai allowed-hostname host.docker.internal` and restart Paperclip
+
+## Transcendiverse Approved Artifact Smoke Test
+
+Run the approved artifact + vault sync smoke harness:
+
+```sh
+pnpm smoke:transcendiverse-approved-artifacts
+```
+
+This command uses the real local HTTP API, creates a clearly labeled smoke issue in the target company, approves it through the real approval route, verifies immutable artifact files under the Paperclip instance root, and verifies raw + synthesis outputs in the configured Transcendiverse vault.
+
+Selection and auth options:
+
+- if there is more than one company, set `PAPERCLIP_SMOKE_COMPANY_ID` or `PAPERCLIP_SMOKE_COMPANY_NAME`
+- in authenticated mode, pass `PAPERCLIP_AUTH_HEADER` or `PAPERCLIP_COOKIE`
+- set `PAPERCLIP_SMOKE_WAIT_SECONDS=90` to control how long the smoke harness waits for `/api/health` to become ready
+- set `PAPERCLIP_SMOKE_CLEANUP_VAULT=true` if you want the command to remove the smoke-created vault files after a successful run
+
+For the full operator workflow and storage layout, see `docs/transcendiverse-approved-artifacts.md`.
+
+If local embedded PostgreSQL is slow to come up, the smoke harness now waits for `GET /api/health` to report `status: ok` before it starts. If health stays stuck at `503` with `database_unreachable`, stop the managed dev runner with `pnpm dev:stop`, confirm the configured embedded DB port is not listening, remove the stale `postmaster.pid`, and restart with `pnpm dev:once`.

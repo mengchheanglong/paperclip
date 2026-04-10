@@ -3,14 +3,33 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   createAppMock,
   createDbMock,
+  createEmbeddedPostgresLogBufferMock,
   detectPortMock,
+  embeddedPostgresInitialiseMock,
+  embeddedPostgresStartMock,
+  ensurePostgresDatabaseMock,
   feedbackExportServiceMock,
   feedbackServiceFactoryMock,
   fakeServer,
+  formatEmbeddedPostgresErrorMock,
+  inspectMigrationsMock,
+  loadConfigMock,
+  loggerMock,
+  readPostmasterOptsPortMock,
+  readPostmasterPidPortMock,
+  readRunningPostmasterPidMock,
+  tryAdoptEmbeddedPostgresClusterMock,
 } = vi.hoisted(() => {
   const createAppMock = vi.fn(async () => ((_: unknown, __: unknown) => {}) as never);
   const createDbMock = vi.fn(() => ({}) as never);
+  const createEmbeddedPostgresLogBufferMock = vi.fn(() => ({
+    append: vi.fn(),
+    getRecentLogs: vi.fn(() => []),
+  }));
   const detectPortMock = vi.fn(async (port: number) => port);
+  const embeddedPostgresInitialiseMock = vi.fn(async () => undefined);
+  const embeddedPostgresStartMock = vi.fn(async () => undefined);
+  const ensurePostgresDatabaseMock = vi.fn(async () => "exists");
   const feedbackExportServiceMock = {
     flushPendingFeedbackTraces: vi.fn(async () => ({ attempted: 0, sent: 0, failed: 0 })),
   };
@@ -24,46 +43,9 @@ const {
     }),
     close: vi.fn(),
   };
-
-  return {
-    createAppMock,
-    createDbMock,
-    detectPortMock,
-    feedbackExportServiceMock,
-    feedbackServiceFactoryMock,
-    fakeServer,
-  };
-});
-
-vi.mock("node:http", () => ({
-  createServer: vi.fn(() => fakeServer),
-}));
-
-vi.mock("detect-port", () => ({
-  default: detectPortMock,
-}));
-
-vi.mock("@paperclipai/db", () => ({
-  createDb: createDbMock,
-  ensurePostgresDatabase: vi.fn(),
-  getPostgresDataDirectory: vi.fn(),
-  inspectMigrations: vi.fn(async () => ({ status: "upToDate" })),
-  applyPendingMigrations: vi.fn(),
-  reconcilePendingMigrationHistory: vi.fn(async () => ({ repairedMigrations: [] })),
-  formatDatabaseBackupResult: vi.fn(() => "ok"),
-  runDatabaseBackup: vi.fn(),
-  authUsers: {},
-  companies: {},
-  companyMemberships: {},
-  instanceUserRoles: {},
-}));
-
-vi.mock("../app.js", () => ({
-  createApp: createAppMock,
-}));
-
-vi.mock("../config.js", () => ({
-  loadConfig: vi.fn(() => ({
+  const formatEmbeddedPostgresErrorMock = vi.fn((err: unknown) => err);
+  const inspectMigrationsMock = vi.fn(async () => ({ status: "upToDate" }));
+  const loadConfigMock = vi.fn(() => ({
     deploymentMode: "authenticated",
     deploymentExposure: "private",
     host: "127.0.0.1",
@@ -97,14 +79,95 @@ vi.mock("../config.js", () => ({
     heartbeatSchedulerEnabled: false,
     heartbeatSchedulerIntervalMs: 30000,
     companyDeletionEnabled: false,
-  })),
-}));
-
-vi.mock("../middleware/logger.js", () => ({
-  logger: {
+    telemetryEnabled: false,
+    extensions: {},
+  }));
+  const loggerMock = {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
+  };
+  const readPostmasterOptsPortMock = vi.fn(() => null);
+  const readPostmasterPidPortMock = vi.fn(() => null);
+  const readRunningPostmasterPidMock = vi.fn(() => null);
+  const tryAdoptEmbeddedPostgresClusterMock = vi.fn(async () => null);
+
+  return {
+    createAppMock,
+    createDbMock,
+    createEmbeddedPostgresLogBufferMock,
+    detectPortMock,
+    embeddedPostgresInitialiseMock,
+    embeddedPostgresStartMock,
+    ensurePostgresDatabaseMock,
+    feedbackExportServiceMock,
+    feedbackServiceFactoryMock,
+    fakeServer,
+    formatEmbeddedPostgresErrorMock,
+    inspectMigrationsMock,
+    loadConfigMock,
+    loggerMock,
+    readPostmasterOptsPortMock,
+    readPostmasterPidPortMock,
+    readRunningPostmasterPidMock,
+    tryAdoptEmbeddedPostgresClusterMock,
+  };
+});
+
+vi.mock("node:http", () => ({
+  createServer: vi.fn(() => fakeServer),
+}));
+
+vi.mock("detect-port", () => ({
+  default: detectPortMock,
+}));
+
+vi.mock("@paperclipai/db", () => ({
+  createDb: createDbMock,
+  ensurePostgresDatabase: ensurePostgresDatabaseMock,
+  formatEmbeddedPostgresError: formatEmbeddedPostgresErrorMock,
+  getPostgresDataDirectory: vi.fn(),
+  inspectMigrations: inspectMigrationsMock,
+  applyPendingMigrations: vi.fn(),
+  reconcilePendingMigrationHistory: vi.fn(async () => ({ repairedMigrations: [] })),
+  createEmbeddedPostgresLogBuffer: createEmbeddedPostgresLogBufferMock,
+  formatDatabaseBackupResult: vi.fn(() => "ok"),
+  runDatabaseBackup: vi.fn(),
+  readPostmasterOptsPort: readPostmasterOptsPortMock,
+  readPostmasterPidPort: readPostmasterPidPortMock,
+  readRunningPostmasterPid: readRunningPostmasterPidMock,
+  tryAdoptEmbeddedPostgresCluster: tryAdoptEmbeddedPostgresClusterMock,
+  authUsers: {},
+  companies: {},
+  companyMemberships: {},
+  instanceUserRoles: {},
+}));
+
+vi.mock("../app.js", () => ({
+  createApp: createAppMock,
+}));
+
+vi.mock("../config.js", () => ({
+  loadConfig: loadConfigMock,
+}));
+
+vi.mock("../middleware/logger.js", () => ({
+  logger: loggerMock,
+}));
+
+vi.mock("embedded-postgres", () => ({
+  default: class MockEmbeddedPostgres {
+    async initialise() {
+      await embeddedPostgresInitialiseMock();
+    }
+
+    async start() {
+      await embeddedPostgresStartMock();
+    }
+
+    async stop() {
+      return undefined;
+    }
   },
 }));
 
@@ -156,6 +219,43 @@ describe("startServer feedback export wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.BETTER_AUTH_SECRET = "test-secret";
+    loadConfigMock.mockReturnValue({
+      deploymentMode: "authenticated",
+      deploymentExposure: "private",
+      host: "127.0.0.1",
+      port: 3210,
+      allowedHostnames: [],
+      authBaseUrlMode: "auto",
+      authPublicBaseUrl: undefined,
+      authDisableSignUp: false,
+      databaseMode: "postgres",
+      databaseUrl: "postgres://paperclip:paperclip@127.0.0.1:5432/paperclip",
+      embeddedPostgresDataDir: "/tmp/paperclip-test-db",
+      embeddedPostgresPort: 54329,
+      databaseBackupEnabled: false,
+      databaseBackupIntervalMinutes: 60,
+      databaseBackupRetentionDays: 30,
+      databaseBackupDir: "/tmp/paperclip-test-backups",
+      serveUi: false,
+      uiDevMiddleware: false,
+      secretsProvider: "local_encrypted",
+      secretsStrictMode: false,
+      secretsMasterKeyFilePath: "/tmp/paperclip-master.key",
+      storageProvider: "local_disk",
+      storageLocalDiskBaseDir: "/tmp/paperclip-storage",
+      storageS3Bucket: "paperclip-test",
+      storageS3Region: "us-east-1",
+      storageS3Endpoint: undefined,
+      storageS3Prefix: "",
+      storageS3ForcePathStyle: false,
+      feedbackExportBackendUrl: "https://telemetry.example.com",
+      feedbackExportBackendToken: "telemetry-token",
+      heartbeatSchedulerEnabled: false,
+      heartbeatSchedulerIntervalMs: 30000,
+      companyDeletionEnabled: false,
+      telemetryEnabled: false,
+      extensions: {},
+    });
   });
 
   it("passes the feedback export service into createApp so pending traces flush in runtime", async () => {
@@ -169,5 +269,62 @@ describe("startServer feedback export wiring", () => {
       storageService: { id: "storage-service" },
       serverPort: 3210,
     });
+  });
+
+  it("retries transient embedded postgres startup errors before continuing", async () => {
+    loadConfigMock.mockReturnValue({
+      deploymentMode: "authenticated",
+      deploymentExposure: "private",
+      host: "127.0.0.1",
+      port: 3210,
+      allowedHostnames: [],
+      authBaseUrlMode: "auto",
+      authPublicBaseUrl: undefined,
+      authDisableSignUp: false,
+      databaseMode: "embedded-postgres",
+      databaseUrl: undefined,
+      embeddedPostgresDataDir: "/tmp/paperclip-test-db",
+      embeddedPostgresPort: 54329,
+      databaseBackupEnabled: false,
+      databaseBackupIntervalMinutes: 60,
+      databaseBackupRetentionDays: 30,
+      databaseBackupDir: "/tmp/paperclip-test-backups",
+      serveUi: false,
+      uiDevMiddleware: false,
+      secretsProvider: "local_encrypted",
+      secretsStrictMode: false,
+      secretsMasterKeyFilePath: "/tmp/paperclip-master.key",
+      storageProvider: "local_disk",
+      storageLocalDiskBaseDir: "/tmp/paperclip-storage",
+      storageS3Bucket: "paperclip-test",
+      storageS3Region: "us-east-1",
+      storageS3Endpoint: undefined,
+      storageS3Prefix: "",
+      storageS3ForcePathStyle: false,
+      feedbackExportBackendUrl: undefined,
+      feedbackExportBackendToken: undefined,
+      heartbeatSchedulerEnabled: false,
+      heartbeatSchedulerIntervalMs: 30000,
+      companyDeletionEnabled: false,
+      telemetryEnabled: false,
+      extensions: {},
+    });
+    ensurePostgresDatabaseMock
+      .mockRejectedValueOnce(Object.assign(new Error("the database system is starting up"), { code: "57P03" }))
+      .mockResolvedValueOnce("exists");
+
+    const started = await startServer();
+
+    expect(started.server).toBe(fakeServer);
+    expect(embeddedPostgresStartMock).toHaveBeenCalledTimes(1);
+    expect(ensurePostgresDatabaseMock).toHaveBeenCalledTimes(2);
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attempt: 1,
+        maxAttempts: 5,
+        label: "ensure embedded PostgreSQL database",
+      }),
+      "ensure embedded PostgreSQL database hit transient PostgreSQL startup state (57P03); retrying",
+    );
   });
 });
